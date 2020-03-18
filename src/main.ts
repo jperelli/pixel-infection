@@ -1,3 +1,3 @@
-import app from "./app/app";
+import App from "./app/app";
 
-document.body.appendChild(app.view);
+document.body.appendChild(new App().pixiapp.view);

@@ -3,36 +3,7 @@ import {
   person as personSprite,
   barrier as barrierSprite
 } from "../assets/loader";
-
-const app = new PIXI.Application({ backgroundColor: 0xeeeeee });
-
-const PEOPLE_COUNT = 1000;
-const FIRST_DATE = new Date("2019-11-17");
-const MINUTES_TICK = 60;
-const DAYS_TO_CURE = 14;
-const BEDS_PER_THOUSAND = 5;
-const OFFSET_FACTOR = 10; // 10 to 20 // bigger is less movement
-const SPEED_FACTOR = 2; // 1 to 5 // biger is people moving faster
-const CONTAGION_PROBABILITY = 1; // 0.1 to 1
-const BARRIER_RANGE = 10; // 10
-let global_date = new Date("2019-11-17");
-
-// randn_bm(-200,110, 0.25) algo asi anda bien creo
-// from https://stackoverflow.com/a/49434653/912450
-function randn_bm(min, max, skew) {
-  let u = 0,
-    v = 0;
-  while (u === 0) u = Math.random(); //Converting [0,1) to (0,1)
-  while (v === 0) v = Math.random();
-  let num = Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
-
-  num = num / 10.0 + 0.5; // Translate to 0 -> 1
-  if (num > 1 || num < 0) num = randn_bm(min, max, skew); // resample between 0 and 1 if out of range
-  num = Math.pow(num, skew); // Skew
-  num *= max - min; // Stretch to fill range
-  num += min; // offset to min
-  return num;
-}
+import { randn_bm, getAverageOfArray, getMedianOfArray } from "./utils";
 
 interface SpritePlusMeta extends PIXI.Sprite {
   data: {
@@ -52,269 +23,270 @@ interface SpritePlusMeta extends PIXI.Sprite {
   };
 }
 
-// holder to store the people
-const people: {
-  dead: Array<SpritePlusMeta>;
-  recovered: Array<SpritePlusMeta>;
-  infected: Array<SpritePlusMeta>;
-  not_infected: Array<SpritePlusMeta>;
-} = {
-  dead: [],
-  recovered: [],
-  infected: [],
-  not_infected: []
-};
+class App {
+  PEOPLE_COUNT = 1000;
+  FIRST_DATE = new Date("2019-11-17");
+  MINUTES_TICK = 60;
+  DAYS_TO_CURE = 14;
+  BEDS_PER_THOUSAND = 5;
+  OFFSET_FACTOR = 10; // 10 to 20 // bigger is less movement
+  SPEED_FACTOR = 2; // 1 to 5 // biger is people moving faster
+  CONTAGION_PROBABILITY = 1; // 0.1 to 1
+  BARRIER_RANGE = 10; // 10
+  global_date = new Date("2019-11-17");
 
-let infected = false;
+  pixiapp: PIXI.Application;
+  HUD_Date: PIXI.Text;
+  HUD_Fps: PIXI.Text;
+  fpsAvg: Array<number> = [];
+  fpsLow = 0;
+  fpsHigh = 0;
+  personBounds: PIXI.Rectangle;
 
-const loader = PIXI.Loader.shared;
-loader.add("personSprite", personSprite);
-loader.load((loader, resources) => {
-  const createSprite = (file: string) => {
-    const person = new PIXI.Sprite(
-      resources.personSprite.texture
-    ) as SpritePlusMeta;
-    person.data = {
-      direction: Math.random() * Math.PI * 2,
-      turningSpeed: Math.random() - 0.8,
-      speed: Math.random() * SPEED_FACTOR,
-      infected: infected ? null : FIRST_DATE,
-      recovered: false,
-      dead: false,
-      health: 100,
-      age: Math.random() * 80,
-      baseX: Math.random() * app.screen.width,
-      baseY: Math.random() * app.screen.height,
-      offsetX: 0,
-      offsetY: 0,
-      offsetMax: (Math.random() * app.screen.height) / OFFSET_FACTOR
+  counts: {
+    [key: string]: {
+      dead: number;
+      recovered: number;
+      infected: number;
+      not_infected: number;
     };
-    person.x = person.data.baseX + person.data.offsetX;
-    person.y = person.data.baseY + person.data.offsetY;
-    person.tint = !infected ? 0xff0000 : 0x4444aa;
-    infected = true;
-    return person;
+  } = {};
+
+  barriers: Array<PIXI.Sprite> = [];
+
+  // holder to store the people
+  people: {
+    dead: Array<SpritePlusMeta>;
+    recovered: Array<SpritePlusMeta>;
+    infected: Array<SpritePlusMeta>;
+    not_infected: Array<SpritePlusMeta>;
+  } = {
+    dead: [],
+    recovered: [],
+    infected: [],
+    not_infected: []
   };
 
-  for (let i = 0; i < PEOPLE_COUNT; i++) {
-    const person = createSprite(personSprite);
-    person.anchor.set(0.5);
-    if (person.data.infected) {
-      people.infected.push(person);
-    } else {
-      people.not_infected.push(person);
-    }
-    app.stage.addChild(person);
+  constructor() {
+    this.pixiapp = new PIXI.Application({ backgroundColor: 0xeeeeee });
+
+    let infected = false;
+    const loader = PIXI.Loader.shared;
+    loader.add("personSprite", personSprite);
+    loader.load((loader, resources) => {
+      const createSprite = (file: string) => {
+        const person = new PIXI.Sprite(
+          resources.personSprite.texture
+        ) as SpritePlusMeta;
+        person.data = {
+          direction: Math.random() * Math.PI * 2,
+          turningSpeed: Math.random() - 0.8,
+          speed: Math.random() * this.SPEED_FACTOR,
+          infected: infected ? null : this.FIRST_DATE,
+          recovered: false,
+          dead: false,
+          health: 100,
+          age: Math.random() * 80,
+          baseX: Math.random() * this.pixiapp.screen.width,
+          baseY: Math.random() * this.pixiapp.screen.height,
+          offsetX: 0,
+          offsetY: 0,
+          offsetMax:
+            (Math.random() * this.pixiapp.screen.height) / this.OFFSET_FACTOR
+        };
+        person.x = person.data.baseX + person.data.offsetX;
+        person.y = person.data.baseY + person.data.offsetY;
+        person.tint = !infected ? 0xff0000 : 0x4444aa;
+        infected = true;
+        return person;
+      };
+
+      for (let i = 0; i < this.PEOPLE_COUNT; i++) {
+        const person = createSprite(personSprite);
+        person.anchor.set(0.5);
+        if (person.data.infected) {
+          this.people.infected.push(person);
+        } else {
+          this.people.not_infected.push(person);
+        }
+        this.pixiapp.stage.addChild(person);
+      }
+    });
+
+    /// FPS
+    this.HUD_Fps = new PIXI.Text("", {
+      fill: "red",
+      fontSize: 15
+    });
+    this.HUD_Fps.y = 30;
+    this.HUD_Fps.x = 0;
+    this.pixiapp.stage.addChild(this.HUD_Fps);
+    /// END FPS CODE
+
+    this.HUD_Date = new PIXI.Text(this.global_date.toString(), {
+      fill: "black",
+      fontSize: 15
+    });
+    this.pixiapp.stage.addChild(this.HUD_Date);
+
+    // create a bounding box for the little people
+    const personBoundsPadding = 0;
+    this.personBounds = new PIXI.Rectangle(
+      -personBoundsPadding,
+      -personBoundsPadding,
+      this.pixiapp.screen.width + personBoundsPadding * 2,
+      this.pixiapp.screen.height + personBoundsPadding * 2
+    );
+
+    this.pixiapp.renderer.plugins.interaction.on("pointerup", event => {
+      const barrier = PIXI.Sprite.from(barrierSprite);
+      barrier.x = event.data.global.x;
+      barrier.y = event.data.global.y;
+      this.barriers.push(barrier);
+      barrier.anchor.set(0.5);
+      this.pixiapp.stage.addChild(barrier);
+    });
+
+    this.pixiapp.ticker.add(this._ticker);
   }
-});
 
-const HUD_Date = new PIXI.Text(global_date.toString(), {
-  fill: "black",
-  fontSize: 15
-});
-app.stage.addChild(HUD_Date);
+  collideswithbarrier = (person: SpritePlusMeta) => {
+    for (const b of this.barriers) {
+      if (
+        Math.abs(b.x - person.x) + Math.abs(b.y - person.y) <
+        this.BARRIER_RANGE
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
 
-const HUD_Counts = new PIXI.Text("", {
-  fill: "black",
-  fontSize: 15
-});
-HUD_Counts.y = 20;
-app.stage.addChild(HUD_Counts);
+  movePeople = (people: Array<SpritePlusMeta>) => {
+    for (let i = people.length - 1; i >= 0; i--) {
+      const person = people[i];
+      if (
+        person.data.offsetX > person.data.offsetMax ||
+        person.data.offsetX < -person.data.offsetMax ||
+        person.data.offsetY > person.data.offsetMax ||
+        person.data.offsetY < -person.data.offsetMax ||
+        this.collideswithbarrier(person)
+      ) {
+        person.data.direction += Math.PI; // effectively change to the opposite direction
+      } else {
+        person.data.direction += person.data.turningSpeed * 0.01;
+      }
+      const plusX = Math.sin(person.data.direction);
+      const plusY = Math.cos(person.data.direction);
+      person.data.offsetX = person.data.offsetX + plusX * person.data.speed;
+      person.data.offsetY = person.data.offsetY + plusY * person.data.speed;
 
-// create a bounding box for the little people
-const personBoundsPadding = 0;
-const personBounds = new PIXI.Rectangle(
-  -personBoundsPadding,
-  -personBoundsPadding,
-  app.screen.width + personBoundsPadding * 2,
-  app.screen.height + personBoundsPadding * 2
-);
+      person.x = person.data.baseX + person.data.offsetX;
+      person.y = person.data.baseY + person.data.offsetY;
 
-const counts: {
-  [key: string]: {
-    dead: number;
-    recovered: number;
-    infected: number;
-    not_infected: number;
-  };
-} = {};
+      // wrap the people by testing their bounds...
+      if (person.x < this.personBounds.x) {
+        person.x += this.personBounds.width;
+      } else if (person.x > this.personBounds.x + this.personBounds.width) {
+        person.x -= this.personBounds.width;
+      }
 
-const barriers: Array<PIXI.Sprite> = [];
-
-const collideswithbarrier = (person: SpritePlusMeta) => {
-  for (const b of barriers) {
-    if (Math.abs(b.x - person.x) + Math.abs(b.y - person.y) < BARRIER_RANGE) {
-      return true;
+      if (person.y < this.personBounds.y) {
+        person.y += this.personBounds.height;
+      } else if (person.y > this.personBounds.y + this.personBounds.height) {
+        person.y -= this.personBounds.height;
+      }
     }
   }
-  return false;
-};
 
-app.renderer.plugins.interaction.on("pointerup", event => {
-  const barrier = PIXI.Sprite.from(barrierSprite);
-  barrier.x = event.data.global.x;
-  barrier.y = event.data.global.y;
-  barriers.push(barrier);
-  barrier.anchor.set(0.5);
-  app.stage.addChild(barrier);
-});
+  _ticker = () => {
+    // add one day
+    this.global_date = new Date(
+      +this.global_date + this.MINUTES_TICK * 60 * 1000
+    );
+    console.log(this.HUD_Date)
+    this.HUD_Date.text = this.global_date.toString();
 
-const movePeople = (people: Array<SpritePlusMeta>) => {
-  for (let i = people.length - 1; i >= 0; i--) {
-    const person = people[i];
-    if (
-      person.data.offsetX > person.data.offsetMax ||
-      person.data.offsetX < -person.data.offsetMax ||
-      person.data.offsetY > person.data.offsetMax ||
-      person.data.offsetY < -person.data.offsetMax ||
-      collideswithbarrier(person)
-    ) {
-      person.data.direction += Math.PI; // effectively change to the opposite direction
-    } else {
-      person.data.direction += person.data.turningSpeed * 0.01;
-    }
-    const plusX = Math.sin(person.data.direction);
-    const plusY = Math.cos(person.data.direction);
-    person.data.offsetX = person.data.offsetX + plusX * person.data.speed;
-    person.data.offsetY = person.data.offsetY + plusY * person.data.speed;
-
-    person.x = person.data.baseX + person.data.offsetX;
-    person.y = person.data.baseY + person.data.offsetY;
-
-    // wrap the people by testing their bounds...
-    if (person.x < personBounds.x) {
-      person.x += personBounds.width;
-    } else if (person.x > personBounds.x + personBounds.width) {
-      person.x -= personBounds.width;
+    this.counts[this.global_date.toISOString().split("T")[0]] = {
+      dead: this.people.dead.length,
+      recovered: this.people.recovered.length,
+      infected: this.people.infected.length,
+      not_infected: this.people.not_infected.length
+    };
+    const HUD_totals = document.getElementById("totals");
+    if (HUD_totals) {
+      HUD_totals.innerHTML = JSON.stringify(
+        this.counts[this.global_date.toISOString().split("T")[0]],
+        undefined,
+        2
+      );
     }
 
-    if (person.y < personBounds.y) {
-      person.y += personBounds.height;
-    } else if (person.y > personBounds.y + personBounds.height) {
-      person.y -= personBounds.height;
+    for (let i = this.people.infected.length - 1; i >= 0; i--) {
+      const person = this.people.infected[i];
+      if (
+        (this.global_date.valueOf() - person.data.infected.valueOf()) /
+          1000 /
+          60 /
+          60 /
+          24 >
+        this.DAYS_TO_CURE
+      ) {
+        const [p] = this.people.infected.splice(i, 1);
+        if (p.data.age < randn_bm(-200, 110, 0.25)) {
+          p.data.recovered = true;
+          p.tint = 0x00ff00;
+          this.people.recovered.push(p);
+        } else {
+          // TODO: the rand max number changes if there is more health system capacity
+          // TODO: give a second chance if there are free beds
+          p.data.dead = true;
+          p.tint = 0xaaaaaa;
+          this.people.dead.push(p);
+        }
+      }
     }
+
+    // iterate through the people and infect the person near to an infected one
+    let newinfected = [];
+    for (let i = this.people.not_infected.length - 1; i >= 0; i--) {
+      const person = this.people.not_infected[i];
+      for (let j = this.people.infected.length - 1; j >= 0; j--) {
+        const other = this.people.infected[j];
+        if (
+          Math.abs(other.x - person.x) + Math.abs(other.y - person.y) < 10 &&
+          Math.random() < this.CONTAGION_PROBABILITY
+        ) {
+          const [p] = this.people.not_infected.splice(i, 1);
+          p.tint = 0xff0000;
+          p.data.infected = this.global_date;
+          newinfected.push(p);
+          break;
+        }
+      }
+    }
+    this.people.infected.push(...newinfected);
+
+    this.movePeople(this.people.not_infected);
+    this.movePeople(this.people.infected);
+    this.movePeople(this.people.recovered);
+
+    // print FPS
+    const avg = getAverageOfArray(this.fpsAvg).toFixed(3);
+    const median = getMedianOfArray(this.fpsAvg);
+    const fps = Number(this.pixiapp.ticker.FPS.toFixed(3));
+    this.HUD_Fps.text = `fps: ${fps}\nlow: ${this.fpsLow}\nhigh: ${this.fpsHigh}\navg: ${avg}\nmed: ${median}`;
+    if (fps < this.fpsLow) {
+      this.fpsLow = fps;
+    }
+    if (fps > this.fpsHigh) {
+      this.fpsHigh = fps;
+    }
+    if (this.fpsAvg.length > 10) {
+      this.fpsAvg.shift();
+    }
+    this.fpsAvg.push(fps);
   }
 }
 
-/// FPS CODE
-const getAverageOfArray = (array: number[]): number => {
-  if (array.length === 0) {
-    return 0;
-  }
-  const sum = array.reduce((previous, current) => (current += previous));
-  return sum / array.length;
-};
-
-const getMedianOfArray = (array: number[]): number => {
-  if (array.length === 0) {
-    return 0;
-  }
-  const sortedArray = array.sort((a, b) => a - b);
-  return (
-    (sortedArray[(sortedArray.length - 1) >> 1] +
-      sortedArray[sortedArray.length >> 1]) /
-    2
-  );
-};
-
-const fpsAvg: Array<number> = [];
-let fpsLow = 0;
-let fpsHigh = 0;
-
-const HUD_Fps = new PIXI.Text("", {
-  fill: "red",
-  fontSize: 15
-});
-HUD_Fps.y = 30;
-HUD_Fps.x = 0;
-app.stage.addChild(HUD_Fps);
-/// END FPS CODE
-
-app.ticker.add(() => {
-  // add one day
-  global_date = new Date(+global_date + MINUTES_TICK * 60 * 1000);
-  HUD_Date.text = global_date.toString();
-
-  counts[global_date.toISOString().split("T")[0]] = {
-    dead: people.dead.length,
-    recovered: people.recovered.length,
-    infected: people.infected.length,
-    not_infected: people.not_infected.length
-  };
-  const HUD_totals = document.getElementById("totals");
-  if (HUD_totals) {
-    HUD_totals.innerHTML = JSON.stringify(
-      counts[global_date.toISOString().split("T")[0]],
-      undefined,
-      2
-    );
-  }
-
-  for (let i = people.infected.length - 1; i >= 0; i--) {
-    const person = people.infected[i];
-    if (
-      (global_date.valueOf() - person.data.infected.valueOf()) /
-        1000 /
-        60 /
-        60 /
-        24 >
-      DAYS_TO_CURE
-    ) {
-      const [p] = people.infected.splice(i, 1);
-      if (p.data.age < randn_bm(-200, 110, 0.25)) {
-        p.data.recovered = true;
-        p.tint = 0x00ff00;
-        people.recovered.push(p);
-      } else {
-        // TODO: the rand max number changes if there is more health system capacity
-        // TODO: give a second chance if there are free beds
-        p.data.dead = true;
-        p.tint = 0xaaaaaa;
-        people.dead.push(p);
-      }
-    }
-  }
-
-  // iterate through the people and infect the person near to an infected one
-  let newinfected = []
-  for (let i = people.not_infected.length - 1; i >= 0; i--) {
-    const person = people.not_infected[i];
-    for (let j = people.infected.length - 1; j >= 0; j--) {
-      const other = people.infected[j];
-      if (
-        Math.abs(other.x - person.x) + Math.abs(other.y - person.y) < 10 &&
-        Math.random() < CONTAGION_PROBABILITY
-      ) {
-        const [p] = people.not_infected.splice(i, 1);
-        p.tint = 0xff0000;
-        p.data.infected = global_date;
-        newinfected.push(p);
-        break;
-      }
-    }
-  }
-  people.infected.push(...newinfected)
-
-  movePeople(people.not_infected)
-  movePeople(people.infected)
-  movePeople(people.recovered)
-
-
-  // print FPS
-  const avg = getAverageOfArray(fpsAvg).toFixed(3);
-  const median = getMedianOfArray(fpsAvg);
-  const fps = Number(app.ticker.FPS.toFixed(3));
-  HUD_Fps.text = `fps: ${fps}\nlow: ${fpsLow}\nhigh: ${fpsHigh}\navg: ${avg}\nmed: ${median}`;
-  if (fps < fpsLow) {
-    fpsLow = fps;
-  }
-  if (fps > fpsHigh) {
-    fpsHigh = fps;
-  }
-  if (fpsAvg.length > 10) {
-    fpsAvg.shift();
-  }
-  fpsAvg.push(fps);
-});
-
-export default app;
+export default App;
