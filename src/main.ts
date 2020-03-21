@@ -1,3 +1,4 @@
 import App from "./app/app";
 
-document.body.appendChild(new App().pixiapp.view);
+const app = new App();
+document.body.appendChild(app.pixiapp.view);
